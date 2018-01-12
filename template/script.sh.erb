@@ -19,6 +19,9 @@
   }
 -%>
 
+# Singularity image
+export IMG="/users/appl/jnicklas/ttt/test.simg"
+
 #
 # Start RStudio Server + Spark cluster
 #
@@ -26,7 +29,7 @@
 # Load the required environment
 setup_env () {
   module purge
-  module load intel/16.0.3 R/3.3.2 rstudio/1.0.136_server spark/2.1.0
+  module load singularity
 }
 setup_env
 
@@ -61,8 +64,10 @@ EOL
 # Launch master
 echo "Launching master on ${SPARK_MASTER_HOST}:${SPARK_MASTER_PORT}..."
 set -x
-"${SPARK_HOME}/bin"/spark-class "org.apache.spark.deploy.master.Master" \
-    --properties-file "${SPARK_CONFIG_FILE}" \
+singularity exec -B "${TMPDIR}:/tmp" "${IMG}" \
+    spark-class \
+      "org.apache.spark.deploy.master.Master" \
+      --properties-file "${SPARK_CONFIG_FILE}" \
   &> "${MASTER_LOG_FILE}" &
 { set +x; } 2>/dev/null
 
@@ -100,9 +105,11 @@ for ((i=0; i<<%= num_workers %>; i++)); do
     # Launch worker
     echo \"Launching worker #${i} on \${SPARK_WORKER_HOST}:\${SPARK_WORKER_PORT}...\"
     set -x
-    \"${SPARK_HOME}/bin\"/spark-class \"org.apache.spark.deploy.worker.Worker\" \
-        --properties-file \"${SPARK_CONFIG_FILE}\" \
-        spark://${SPARK_MASTER_HOST}:${SPARK_MASTER_PORT} \
+    singularity exec -B \"${TMPDIR}:/tmp\" \"${IMG}\" \
+        spark-class \
+          \"org.apache.spark.deploy.worker.Worker\" \
+          --properties-file \"${SPARK_CONFIG_FILE}\" \
+          spark://${SPARK_MASTER_HOST}:${SPARK_MASTER_PORT} \
       &> \"\${WORKER_LOG_FILE}\"
   " &
 done
@@ -111,21 +118,43 @@ done
 # Launch RStudio Server
 #
 
+# Generate secondary R profile for internal scripts
+export SECONDARY_R_PROFILE_USER="${PWD}/general.R"
+(
+umask 077
+sed 's/^ \{2\}//' > "${SECONDARY_R_PROFILE_USER}" << EOL
+  .First <- function() {
+    # create local user library path and add it to libPaths
+    dir.create(path = Sys.getenv("R_LIBS_USER"), showWarnings = FALSE, recursive = TRUE)
+    .libPaths(c(Sys.getenv("R_LIBS_USER"), .libPaths()))
+
+    # Disable AWT in Java
+    Sys.setenv(NOAWT = 1)
+  }
+EOL
+)
+
 # Generate an R profile that sets up Spark
 export R_PROFILE_USER="${PWD}/shell.R"
 (
 umask 077
 sed 's/^ \{2\}//' > "${R_PROFILE_USER}" << EOL
   .First <- function() {
-    # create local user library path (not present by default)
-    dir.create(path = Sys.getenv("R_LIBS_USER"), showWarnings = FALSE, recursive = TRUE)
+    # Do not create Spark contexts within internal scripts
+    Sys.setenv(R_PROFILE_USER = "${SECONDARY_R_PROFILE_USER}")
 
-    # add it to the libPaths
+    # create local user library path and add it to libPaths
+    dir.create(path = Sys.getenv("R_LIBS_USER"), showWarnings = FALSE, recursive = TRUE)
     .libPaths(c(Sys.getenv("R_LIBS_USER"), .libPaths()))
 
-    library(sparklyr)
+    # Disable AWT in Java
+    Sys.setenv(NOAWT = 1)
 
-    conf <- spark_config()
+    # Make sure sparklyr package is the last loaded one
+    old <- getOption("defaultPackages")
+    options(defaultPackages = c(old, "sparklyr"))
+
+    conf <- sparklyr::spark_config(use_default = FALSE)
     <%- spark_config.each do |k, v| -%>
     conf\$<%= k %> <- "<%= v %>"
     <%- end -%>
@@ -133,8 +162,10 @@ sed 's/^ \{2\}//' > "${R_PROFILE_USER}" << EOL
     conf\$spark.executor.memory <- "<%= avail_mem / num_workers %>G"
     conf\$spark.driver.maxResultSize <- "0"
 
-    sc <- spark_connect(master="spark://${SPARK_MASTER_HOST}:${SPARK_MASTER_PORT}",
-                  config = conf)
+    sc <- sparklyr::spark_connect(
+      master="spark://${SPARK_MASTER_HOST}:${SPARK_MASTER_PORT}",
+      config = conf
+    )
     assign("sc", sc, envir = .GlobalEnv)
     cat("\\n Welcome to")
     cat("\\n")
@@ -142,7 +173,7 @@ sed 's/^ \{2\}//' > "${R_PROFILE_USER}" << EOL
     cat("   / __/__  ___ _____/ /__", "\\n")
     cat("  _\\\\ \\\\/ _ \\\\/ _ \`/ __/  '_/", "\\n")
     cat(" /___/ .__/\\\\_,_/_/ /_/\\\\_\\\\")
-    cat("   version ", invoke(spark_context(sc), "version"), "\\n")
+    cat("   version ", sparklyr::invoke(sparklyr::spark_context(sc), "version"), "\\n")
     cat("    /_/", "\\n")
     cat("\\n")
     cat("\\n Spark Session available as 'sc'.\\n")
@@ -161,19 +192,14 @@ sed 's/^ \{2\}//' > "${RSESSION_WRAPPER_FILE}" << EOL
   export RSESSION_LOG_FILE="${PWD}/rsession.log"
   exec &>"\${RSESSION_LOG_FILE}"
 
-  # Load the required environment
-  $(declare -f setup_env)
-  setup_env
-
   # Load the PBS environment
   $(declare -xp | grep PBS)
 
+  # Carry over SPARK_HOME
+  $(singularity exec "${IMG}" bash -c 'declare -xp SPARK_HOME')
+
   # Carry over R_PROFILE_USER
   $(declare -xp R_PROFILE_USER)
-  export R_HISTFILE=/dev/null
-
-  # Some debugging info
-  module list
 
   # Launch the original command
   echo "Launching rsession..."
@@ -189,10 +215,10 @@ cd "${HOME}"
 # Launch the RStudio Server
 echo "Starting up rserver..."
 set -x
-/usr/local/proot/bin/proot-x86_64 -b "${TMPDIR}:/tmp" \
-  rserver \
-    --www-port ${port} \
-    --auth-none 0 \
-    --auth-pam-helper-path "<%= session.staged_root.join("bin", "auth") %>" \
-    --auth-encrypt-password 0 \
-    --rsession-path "${RSESSION_WRAPPER_FILE}"
+singularity exec -B "${TMPDIR}:/tmp" "${IMG}" \
+    rserver \
+      --www-port ${port} \
+      --auth-none 0 \
+      --auth-pam-helper-path "<%= session.staged_root.join("bin", "auth") %>" \
+      --auth-encrypt-password 0 \
+      --rsession-path "${RSESSION_WRAPPER_FILE}"
