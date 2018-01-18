@@ -21,6 +21,7 @@
 
 # Singularity image
 export IMG="/users/appl/jnicklas/ttt/test.simg"
+#export IMG="shub://nickjer/singularity-rstudio-spark"
 
 #
 # Start RStudio Server + Spark cluster
@@ -186,14 +187,11 @@ export RSESSION_WRAPPER_FILE="${PWD}/rsession.sh"
 (
 umask 077
 sed 's/^ \{2\}//' > "${RSESSION_WRAPPER_FILE}" << EOL
-  #!/bin/bash -l
+  #!/usr/bin/env bash
 
   # Log all output from this script
   export RSESSION_LOG_FILE="${PWD}/rsession.log"
   exec &>"\${RSESSION_LOG_FILE}"
-
-  # Load the PBS environment
-  $(declare -xp | grep PBS)
 
   # Carry over SPARK_HOME
   $(singularity exec "${IMG}" bash -c 'declare -xp SPARK_HOME')
