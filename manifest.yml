@@ -4,8 +4,8 @@ category: Interactive Apps
 subcategory: Servers
 role: batch_connect
 description: |
-  This app will launch [RStudio Server] 1.1.383 using [R] 3.4.3 as well as an
-  [Apache Spark] 2.2.1 cluster on the [Owens cluster].
+  This app will launch [RStudio Server] using [R] 3.4.3 as well as an [Apache
+  Spark] 2.2.1 cluster on the [Owens cluster].
 
   [RStudio Server]: https://www.rstudio.com/products/rstudio-server/
   [R]: https://www.r-project.org/

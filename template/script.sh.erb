@@ -19,10 +19,6 @@
   }
 -%>
 
-# Singularity image
-export IMG="/users/appl/jnicklas/ttt/test.simg"
-#export IMG="shub://nickjer/singularity-rstudio-spark"
-
 #
 # Start RStudio Server + Spark cluster
 #
@@ -31,8 +27,18 @@ export IMG="/users/appl/jnicklas/ttt/test.simg"
 setup_env () {
   module purge
   module load singularity
+
+  export SINGULARITY_CACHEDIR="${HOME}/.Singularity/data/<%= session.token %>"
+  export IMG="shub://nickjer/singularity-rstudio-spark:2.2.1-hadoop-2.7-r-3.4.3"
 }
 setup_env
+
+# Create Singularity image if it doesn't already exist
+echo "Pulling down container..."
+mkdir -p "${SINGULARITY_CACHEDIR}"
+set -x
+singularity pull "${IMG}"
+{ set +x; } 2>/dev/null
 
 #
 # Launch Spark cluster in standalone mode
@@ -104,7 +110,7 @@ for ((i=0; i<<%= num_workers %>; i++)); do
     export WORKER_LOG_FILE=\"${LOG_ROOT}/spark-worker-\${SPARK_WORKER_HOST}-${i}.out\"
 
     # Launch worker
-    echo \"Launching worker #${i} on \${SPARK_WORKER_HOST}:\${SPARK_WORKER_PORT}...\"
+    echo \"Launching worker #${i}.\${PBS_NODENUM} on \${SPARK_WORKER_HOST}:\${SPARK_WORKER_PORT}...\"
     set -x
     singularity exec -B \"${TMPDIR}:/tmp\" \"${IMG}\" \
         spark-class \
