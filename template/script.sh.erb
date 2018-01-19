@@ -19,26 +19,56 @@
   }
 -%>
 
-#
-# Start RStudio Server + Spark cluster
-#
+<%-
+  img_owner = "nickjer"
+  img_repo  = "singularity-rstudio-spark"
+  img_tag   = "2.2.1-hadoop-2.7-r-3.4.3"
+
+  img_name  = "#{img_owner}-#{img_repo}-#{img_tag}.simg"
+
+  singularity_root = Pathname.new(ENV["HOME"]).join(".Singularity")
+  singularity_cache = singularity_root.join("cache")
+  singularity_image = singularity_root.join("data", session.token, img_name)
+-%>
 
 # Load the required environment
 setup_env () {
   module purge
   module load singularity
 
-  export SINGULARITY_CACHEDIR="${HOME}/.Singularity/data/<%= session.token %>"
-  export IMG="shub://nickjer/singularity-rstudio-spark:2.2.1-hadoop-2.7-r-3.4.3"
+  export IMG="<%= singularity_image %>"
 }
 setup_env
 
-# Create Singularity image if it doesn't already exist
-echo "Pulling down container..."
+#
+# Setup Singularity
+#
+
+# Pull down Singularity image
+echo "Pulling down image..."
+export SINGULARITY_CACHEDIR="<%= singularity_cache %>"
 mkdir -p "${SINGULARITY_CACHEDIR}"
 set -x
-singularity pull "${IMG}"
+IMG_PATH=$( \
+singularity pull \
+    --hash \
+    "shub://<%= img_owner %>/<%= img_repo %>:<%= img_tag %>" \
+  | tee >(cat 1>&2) \
+  | awk 'END{print $NF}' \
+)
 { set +x; } 2>/dev/null
+[[ ! -e ${IMG_PATH} ]] && exit 1
+
+# Setup Singularity image for usage
+echo "Setting up image..."
+mkdir -p "<%= singularity_image.dirname %>"
+set -x
+ln -sf "${IMG_PATH}" "<%= singularity_image %>"
+{ set +x; } 2>/dev/null
+
+#
+# Start RStudio Server + Spark cluster
+#
 
 #
 # Launch Spark cluster in standalone mode
@@ -71,7 +101,7 @@ EOL
 # Launch master
 echo "Launching master on ${SPARK_MASTER_HOST}:${SPARK_MASTER_PORT}..."
 set -x
-singularity exec -B "${TMPDIR}:/tmp" "${IMG}" \
+singularity exec "${IMG}" \
     spark-class \
       "org.apache.spark.deploy.master.Master" \
       --properties-file "${SPARK_CONFIG_FILE}" \
@@ -112,7 +142,7 @@ for ((i=0; i<<%= num_workers %>; i++)); do
     # Launch worker
     echo \"Launching worker #${i}.\${PBS_NODENUM} on \${SPARK_WORKER_HOST}:\${SPARK_WORKER_PORT}...\"
     set -x
-    singularity exec -B \"${TMPDIR}:/tmp\" \"${IMG}\" \
+    singularity exec \"${IMG}\" \
         spark-class \
           \"org.apache.spark.deploy.worker.Worker\" \
           --properties-file \"${SPARK_CONFIG_FILE}\" \
@@ -219,7 +249,7 @@ cd "${HOME}"
 # Launch the RStudio Server
 echo "Starting up rserver..."
 set -x
-singularity exec -B "${TMPDIR}:/tmp" "${IMG}" \
+singularity exec -B "$(mktemp -d):/tmp" "${IMG}" \
     rserver \
       --www-port ${port} \
       --auth-none 0 \
