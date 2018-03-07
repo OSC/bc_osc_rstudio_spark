@@ -156,8 +156,10 @@ sed 's/^ \{2\}//' > "${R_PROFILE_USER}" << EOL
     old <- getOption("defaultPackages")
     options(defaultPackages = c(old, "sparklyr"))
 
+    conf <- sparklyr::spark_config(use_default = FALSE)
     sc <- sparklyr::spark_connect(
-      master="spark://${SPARK_MASTER_HOST}:${SPARK_MASTER_PORT}"
+      master="spark://${SPARK_MASTER_HOST}:${SPARK_MASTER_PORT}",
+      config=conf
     )
     assign("sc", sc, envir = .GlobalEnv)
     cat("\\n Welcome to")
